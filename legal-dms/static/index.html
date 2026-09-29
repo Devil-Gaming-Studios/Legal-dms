@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LexiGuard CaseVault</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={theme:{extend:{colors:{bg:'#031427',s1:'#0b1c30',s2:'#102034',s3:'#1b2b3f',s4:'#26364a',fg:'#d3e4fe',mut:'#909097',line:'#45464d',acc:'#b4c5ff',accd:'#0053db',ok:'#68dba9',bad:'#ffb4ab'},fontFamily:{sans:['Inter'],mono:['JetBrains Mono']}}}}</script>
+<style>
+body{background:#031427;color:#d3e4fe;font-family:Inter,sans-serif}
+.ms{font-family:'Material Symbols Outlined';font-size:20px;vertical-align:middle;font-feature-settings:'liga';font-weight:normal;font-style:normal}
+.card{background:#0b1c30;border:1px solid #45464d;border-radius:8px}
+.btn{border:1px solid #45464d;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:500;display:inline-flex;gap:6px;align-items:center}
+.btn:hover{background:#1b2b3f}.btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #b4c5ff}
+.btn-p{background:#0053db;border-color:#0053db;color:#fff}.btn-p:hover{background:#1a66e8}
+.btn-d{color:#ffb4ab;border-color:#93000a}
+input,select,textarea{background:#031427;border:1px solid #45464d;border-radius:6px;padding:7px 10px;width:100%;font-size:13px;color:#d3e4fe}
+.mono{font-family:'JetBrains Mono',monospace}
+.tag{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid #45464d}
+th{text-align:left;font-weight:500;color:#909097;font-size:12px;padding:8px 12px}td{padding:8px 12px;border-top:1px solid #1b2b3f;font-size:13px}
+</style></head>
+<body>
+<div id="login" class="min-h-screen flex items-center justify-center p-4">
+  <form id="lf" class="card p-6 w-full max-w-sm space-y-3">
+    <img src="logo.svg" class="h-12" alt="LexiGuard CaseVault">
+    <p class="text-sm text-mut">Sign in to the evidence and case vault.</p>
+    <input name="username" placeholder="Username" autocomplete="username" required>
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button class="btn btn-p w-full justify-center">Sign in</button>
+    <p class="text-xs text-mut">Demo users: admin, officer, clerk, prosecutor, judge, auditor.</p>
+  </form>
+</div>
+<div id="app" class="hidden min-h-screen md:flex">
+  <aside class="md:w-60 bg-s1 border-r border-line p-3 shrink-0 md:min-h-screen">
+    <img src="logo.svg" class="h-10 mb-4" alt="LexiGuard CaseVault">
+    <nav id="nav" class="flex md:block gap-1 overflow-x-auto"></nav>
+    <div class="mt-6 text-xs text-mut hidden md:block" id="who"></div>
+    <button class="btn mt-2 w-full justify-center" onclick="logout()"><span class="ms">logout</span>Sign out</button>
+  </aside>
+  <main class="flex-1 p-4 md:p-6 min-w-0">
+    <div class="flex gap-2 mb-4">
+      <button class="btn flex-1 justify-start text-mut" onclick="openSearch()"><span class="ms">search</span>Search cases and documents <span class="ml-auto mono text-xs">Ctrl K</span></button>
+    </div>
+    <div id="view"></div>
+  </main>
+</div>
+<div id="toast" class="fixed bottom-4 right-4 z-[60]"></div>
+<script>
+const S={token:sessionStorage.t||'',role:sessionStorage.r||'',user:sessionStorage.u||'',perms:JSON.parse(sessionStorage.p||'[]'),view:'overview',R:{case:'',cls:'',sel:null},ex:null,hs:null};
+const can=p=>S.perms.includes('*')||S.perms.includes(p);
+const e=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=t=>new Date(t*1000).toISOString().slice(0,19).replace('T',' ')+' UTC';
+const $=id=>document.getElementById(id);
+const ic=n=>`<span class="ms">${n}</span>`;
+function toast(m,ok=true){const d=document.createElement('div');d.className=`card px-4 py-2 mb-2 text-sm ${ok?'text-ok':'text-bad'}`;d.textContent=m;$('toast').append(d);setTimeout(()=>d.remove(),4500)}
+async function raw(path,o={}){o.headers={...(o.headers||{}),Authorization:'Bearer '+S.token};const r=await fetch(path,o);if(r.status===401&&S.token){logout();throw Error('Session expired')}if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch{}throw Error(m)}return r}
+const api=async(p,o)=>(await raw(p,o)).json();
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+const guard=f=>async(...a)=>{try{await f(...a)}catch(x){toast(x.message,false)}};
+function save(name,blob){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click()}
+function modal(title,body,onok,label='Save'){const d=document.createElement('div');d.className='fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4';
+ d.innerHTML=`<form class="card w-full max-w-md p-5 space-y-3 max-h-[90vh] overflow-auto" style="background:#102034"><h3 class="font-semibold">${title}</h3>${body}<div class="flex gap-2 justify-end"><button type="button" class="btn" data-x>Cancel</button><button class="btn btn-p">${label}</button></div></form>`;
+ document.body.append(d);d.querySelector('[data-x]').onclick=()=>d.remove();
+ d.querySelector('form').onsubmit=async ev=>{ev.preventDefault();try{await onok(new FormData(ev.target));d.remove()}catch(x){if(x.message)toast(x.message,false)}};return d}
+const fld=(n,l,t='text',x='')=>`<label class="block text-xs text-mut">${l}<input name="${n}" type="${t}" ${x} class="mt-1 text-fg"></label>`;
+const sel=(n,l,opts)=>`<label class="block text-xs text-mut">${l}<select name="${n}" class="mt-1">${opts.map(o=>`<option value="${e(o[0])}">${e(o[1])}</option>`).join('')}</select></label>`;
+const caseOpts=cs=>cs.map(c=>[c.id,`${c.id} - ${c.title}`]);
+
+/* ---------- auth + nav ---------- */
+$('lf').onsubmit=guard(async ev=>{ev.preventDefault();const f=new FormData(ev.target);
+ const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:f.get('username'),password:f.get('password')})});
+ if(!r.ok)throw Error('Wrong username or password');const j=await r.json();
+ Object.assign(S,{token:j.token,role:j.role,user:j.user,perms:j.perms});
+ sessionStorage.t=j.token;sessionStorage.r=j.role;sessionStorage.u=j.user;sessionStorage.p=JSON.stringify(j.perms);boot()});
+function logout(){sessionStorage.clear();location.reload()}
+const VIEWS=[['overview','dashboard','Command overview'],['repo','folder_open','Document repository'],['custody','link','Chain of custody and audit'],['handoffs','handshake','Prosecution handoffs'],['rbac','admin_panel_settings','Access control']];
+function boot(){$('login').classList.add('hidden');$('app').classList.remove('hidden');$('app').classList.add('flex');
+ $('who').textContent=`${S.user} (${S.role})`;
+ $('nav').innerHTML=VIEWS.filter(v=>v[0]!=='rbac'||can('admin')).map(v=>`<button class="btn w-full justify-start mb-1 border-transparent ${S.view===v[0]?'bg-s3':''}" onclick="go('${v[0]}')">${ic(v[1])}<span class="whitespace-nowrap">${v[2]}</span></button>`).join('');
+ render()}
+const go=v=>{S.view=v;boot()};
+const render=guard(async()=>{$('view').innerHTML='<p class="text-mut">Loading...</p>';await({overview:vOverview,repo:vRepo,custody:vCustody,handoffs:vHandoffs,rbac:vRbac}[S.view])()});
+document.addEventListener('keydown',ev=>{if((ev.ctrlKey||ev.metaKey)&&ev.key==='k'&&S.token){ev.preventDefault();openSearch()}});
+
+/* ---------- overview ---------- */
+async function vOverview(){
+ const [st,cases,docs]=await Promise.all([api('/stats'),api('/cases'),api('/documents')]);
+ let sentinel='';
+ if(can('audit:r')){const [v,m]=await Promise.all([api('/audit/verify'),api('/audit/merkle')]);
+  sentinel=`<div class="card p-4"><h3 class="font-semibold mb-2">${ic('shield_lock')} Tamper sentinel</h3>
+  <p class="${v.intact?'text-ok':'text-bad'} text-sm">${v.intact?'Audit ledger intact':'Ledger broken at entry '+v.broken_at}</p>
+  <p class="text-xs text-mut mt-2">Merkle root over ${m.leaves} events</p><p class="mono text-xs break-all">${m.root}</p>
+  <button class="btn mt-3" onclick="aiAudit()">${ic('psychology')}Review audit with AI</button><div id="ai" class="text-sm mt-2 whitespace-pre-wrap"></div></div>`}
+ const stat=(l,v,i)=>`<div class="card p-4"><div class="text-mut text-xs">${ic(i)} ${l}</div><div class="text-3xl font-bold mt-1">${v}</div></div>`;
+ $('view').innerHTML=`<div class="flex flex-wrap items-center gap-2 mb-4"><div class="mr-auto"><h1 class="text-2xl font-bold">Command overview</h1><p class="text-sm text-mut">Cases, evidence and custody at a glance.</p></div>
+  <button class="btn" onclick="verifyAll()">${ic('verified')}Verify all hashes</button>
+  ${can('case:w')?`<button class="btn" onclick="newCase()">${ic('create_new_folder')}Initiate case file</button>`:''}
+  ${can('doc:w')?`<button class="btn btn-p" onclick="ingest()">${ic('file_upload')}Ingest document</button>`:''}</div>
+ <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">${stat('Documents',st.documents,'folder_special')}${stat('Cases',st.cases,'gavel')}${stat('Active exhibits',st.assets,'inventory_2')}${stat('Handoff packages',st.handoffs,'handshake')}</div>
+ <div class="grid lg:grid-cols-3 gap-4"><div class="lg:col-span-2 space-y-4">
+  <div class="card overflow-x-auto"><h3 class="font-semibold p-4 pb-0">Case docket</h3><table class="w-full"><tr><th>Case</th><th>Title and division</th><th>Docs</th><th>Exhibits</th><th>Priority</th><th></th></tr>
+  ${cases.map(c=>`<tr><td class="mono">${e(c.id)}</td><td>${e(c.title)}<div class="text-xs text-mut">${e(c.division)}</div></td><td>${c.docs}</td><td>${c.assets}</td><td><span class="tag">${e(c.priority)}</span></td><td><button class="btn" onclick="S.R.case='${e(c.id)}';go('repo')">Inspect</button></td></tr>`).join('')||'<tr><td colspan=6 class="text-mut">No cases yet. Initiate a case file to begin.</td></tr>'}</table></div>
+  <div class="card overflow-x-auto"><h3 class="font-semibold p-4 pb-0">Recent intake</h3><table class="w-full"><tr><th>Document</th><th>Case</th><th>Uploaded by</th><th>SHA-256</th></tr>
+  ${docs.slice(-5).reverse().map(d=>`<tr><td>${e(d.title)} <span class="text-xs text-mut">v${d.version}</span></td><td class="mono">${e(d.case_id)}</td><td>${e(d.owner)}<div class="text-xs text-mut">${fmt(d.created)}</div></td><td class="mono text-xs">${d.sha256.slice(0,14)}...</td></tr>`).join('')||'<tr><td colspan=4 class="text-mut">No documents ingested yet.</td></tr>'}</table></div></div>
+ <div class="space-y-4">${sentinel}</div></div>`}
+const aiAudit=guard(async()=>{$('ai').textContent='Analyzing...';$('ai').textContent=(await api('/audit/insights')).analysis});
+const verifyAll=guard(async()=>{const ds=await api('/documents');let bad=0;for(const d of ds){const v=await api(`/documents/${d.id}/verify`);if(!v.hash_intact||!v.signature_valid)bad++}toast(bad?`${bad} of ${ds.length} documents FAILED integrity`:`All ${ds.length} documents verified`,!bad)});
+const newCase=()=>modal('Initiate case file',fld('id','Case number','text','required placeholder="CR-2026-0001"')+fld('title','Title','text','required')+fld('division','Division')+sel('priority','Priority',[['standard','Standard'],['priority','Priority'],['classified','Classified']]),
+ async f=>{await post('/cases',Object.fromEntries(f));toast('Case created');render()});
+const ingest=guard(async()=>{const cs=await api('/cases');if(!cs.length)return toast('Create a case first',false);
+ modal('Ingest document',sel('case_id','Case',caseOpts(cs))+fld('title','Title','text','required')+sel('classification','Classification',[['normal','Public record'],['sensitive','Sensitive'],['restricted','Restricted']])+fld('file','File (PDF or text)','file','required'),
+ async f=>{const r=await raw('/documents',{method:'POST',body:f});const j=await r.json();toast(`Sealed as v${j.version}: ${j.sha256.slice(0,12)}...`);render()},'Encrypt and seal')});
+
+/* ---------- repository ---------- */
+async function vRepo(){
+ const [cs,docs]=await Promise.all([api('/cases'),api('/documents')]);
+ const list=docs.filter(d=>(!S.R.case||d.case_id===S.R.case)&&(!S.R.cls||d.classification===S.R.cls));
+ $('view').innerHTML=`<div class="flex flex-wrap items-center gap-2 mb-4"><div class="mr-auto"><h1 class="text-2xl font-bold">Document repository</h1><p class="text-sm text-mut">${list.length} of ${docs.length} documents shown.</p></div>
+  ${can('doc:w')?`<button class="btn btn-p" onclick="ingest()">${ic('file_upload')}Ingest document</button>`:''}</div>
+ <div class="flex flex-wrap gap-2 mb-4"><select class="!w-auto" onchange="S.R.case=this.value;render()"><option value="">All cases</option>${cs.map(c=>`<option value="${e(c.id)}" ${S.R.case===c.id?'selected':''}>${e(c.id)}</option>`).join('')}</select>
+  <select class="!w-auto" onchange="S.R.cls=this.value;render()">${[['','All classifications'],['normal','Public record'],['sensitive','Sensitive'],['restricted','Restricted']].map(o=>`<option value="${o[0]}" ${S.R.cls===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></div>
+ <div class="grid lg:grid-cols-5 gap-4"><div class="lg:col-span-2 space-y-2">
+ ${list.map(d=>`<button class="card p-3 w-full text-left ${S.R.sel===d.id?'border-acc':''}" onclick="S.R.sel='${d.id}';render()"><div class="flex gap-2 items-center">${ic(d.classification==='restricted'?'lock':'description')}<b class="truncate">${e(d.title)}</b><span class="tag ml-auto">v${d.version}</span></div><div class="text-xs text-mut mt-1">${e(d.case_id)} - ${e(d.owner)} - ${fmt(d.created)}</div><div class="mono text-xs mt-1">${d.sha256.slice(0,16)}...</div></button>`).join('')||'<p class="text-mut">No documents match. Ingest one or change the filters.</p>'}</div>
+ <div id="insp" class="lg:col-span-3"></div></div>`;
+ if(S.R.sel&&list.some(d=>d.id===S.R.sel))inspect(list.find(d=>d.id===S.R.sel))
+ else $('insp').innerHTML='<div class="card p-6 text-mut">Select a document to inspect its text, notes and integrity.</div>'}
+const inspect=guard(async d=>{const [t,n]=await Promise.all([api(`/documents/${d.id}/text`),api(`/documents/${d.id}/notes`)]);
+ $('insp').innerHTML=`<div class="card p-4 space-y-3"><div class="flex items-center gap-2"><h3 class="font-semibold">${e(d.title)}</h3><span class="tag">${e(d.classification)}</span></div>
+ <div class="flex flex-wrap gap-2"><button class="btn" onclick="verifyDoc('${d.id}')">${ic('verified')}Verify integrity</button><button class="btn" onclick="summarize('${d.id}')">${ic('psychology')}Summarize with AI</button>
+ <button class="btn" onclick="dl('${d.id}','${e(d.title)}')">${ic('download')}Download</button><button class="btn" onclick="cert('${d.id}')">${ic('workspace_premium')}Court certificate</button>
+ ${can('handoff:w')?`<button class="btn btn-p" onclick="mkHandoff('${d.id}','${e(d.case_id)}','${e(d.title)}')">${ic('share')}Start prosecution handoff</button>`:''}</div>
+ <div id="res" class="text-sm whitespace-pre-wrap"></div>
+ <div class="text-xs text-mut">SHA-256</div><div class="mono text-xs break-all">${d.sha256}</div>
+ <div class="text-xs text-mut">Extracted text</div><pre class="bg-bg p-3 rounded text-xs max-h-64 overflow-auto whitespace-pre-wrap">${e(t.text)||'No text could be extracted from this file.'}</pre>
+ <div class="text-xs text-mut">Legal notes</div>${n.map(x=>`<div class="text-sm border-l-2 border-acc pl-2 mb-1">${e(x.body)}<div class="text-xs text-mut">${e(x.author)} - ${fmt(x.ts)}</div></div>`).join('')||'<p class="text-sm text-mut">No notes yet.</p>'}
+ ${can('doc:w')?`<form onsubmit="addNote(event,'${d.id}')" class="flex gap-2"><input name="body" placeholder="Add legal note" required><button class="btn">Add note</button></form>`:''}</div>`});
+const verifyDoc=guard(async id=>{const v=await api(`/documents/${id}/verify`);$('res').innerHTML=`<span class="${v.hash_intact&&v.signature_valid?'text-ok':'text-bad'}">${v.hash_intact&&v.signature_valid?'Intact: hash and signature match.':'TAMPERING DETECTED: '+(v.hash_intact?'':'hash mismatch ')+(v.signature_valid?'':'signature invalid')}</span>`});
+const summarize=guard(async id=>{$('res').textContent='Summarizing with Groq...';$('res').textContent=(await api(`/documents/${id}/summarize`)).summary});
+const dl=guard(async(id,name)=>save(name,await(await raw(`/documents/${id}/download`)).blob()));
+const cert=guard(async id=>{const h=await(await raw(`/documents/${id}/certificate`)).text();window.open(URL.createObjectURL(new Blob([h],{type:'text/html'})))});
+const addNote=guard(async(ev,id)=>{ev.preventDefault();await post(`/documents/${id}/notes`,{body:new FormData(ev.target).get('body')});render()});
+const mkHandoff=(id,cid,title)=>modal('Start prosecution handoff',fld('title','Package title','text',`required value="${title}"`)+fld('to_org','Receiving office','text','required placeholder="District Attorney - Special Prosecutions"')+fld('hours','Hours until unsigned package expires','number','value="72" min="1"'),
+ async f=>{await post('/handoffs',{case_id:cid,title:f.get('title'),to_org:f.get('to_org'),hours:+f.get('hours'),doc_ids:[id]});toast('Handoff package created');S.view='handoffs';boot()});
+
+/* ---------- custody + audit ---------- */
+async function vCustody(){
+ const [assets,docs]=await Promise.all([api('/assets'),api('/documents')]);
+ let ledger='';
+ if(can('audit:r')){const a=await api('/audit');ledger=`<div class="card overflow-x-auto mt-4"><div class="flex items-center p-4 pb-0 gap-2"><h3 class="font-semibold mr-auto">Access and audit log</h3><button class="btn" onclick="verLedger()">${ic('verified_user')}Verify ledger</button></div>
+ <table class="w-full"><tr><th>Time</th><th>Operator</th><th>Action</th><th>Target</th><th>Ledger hash</th></tr>${a.slice(0,30).map(r=>`<tr><td class="whitespace-nowrap">${fmt(r.ts)}</td><td>${e(r.actor)}</td><td>${e(r.action)}</td><td class="mono">${e(r.target)}</td><td class="mono text-xs">${r.hash.slice(0,14)}...</td></tr>`).join('')}</table></div>`}
+ $('view').innerHTML=`<div class="flex flex-wrap items-center gap-2 mb-4"><div class="mr-auto"><h1 class="text-2xl font-bold">Chain of custody and audit</h1><p class="text-sm text-mut">Every exhibit and document, from intake to disposal.</p></div>
+  ${can('asset:w')?`<button class="btn btn-p" onclick="newAsset()">${ic('add_box')}Register exhibit</button>`:''}</div>
+ <div class="grid lg:grid-cols-3 gap-4"><div class="space-y-2">
+  <div class="text-xs text-mut">Physical exhibits and assets</div>
+  ${assets.map(a=>`<button class="card p-3 w-full text-left ${S.ex&&S.ex.id===a.id?'border-acc':''}" onclick="S.ex={t:'a',id:'${a.id}'};render()"><b>${e(a.name)}</b><div class="text-xs text-mut">${a.id} - ${e(a.status.replace('_',' '))} - held by ${e(a.holder)}</div></button>`).join('')||'<p class="text-sm text-mut">No exhibits registered yet.</p>'}
+  <div class="text-xs text-mut pt-2">Documents</div>
+  ${docs.map(d=>`<button class="card p-3 w-full text-left ${S.ex&&S.ex.id===d.id?'border-acc':''}" onclick="S.ex={t:'d',id:'${d.id}'};render()">${e(d.title)}<div class="text-xs text-mut">${e(d.case_id)} - v${d.version}</div></button>`).join('')}</div>
+ <div id="trail" class="lg:col-span-2"><div class="card p-6 text-mut">Select an exhibit or document to see its custody trail.</div></div></div>${ledger}`;
+ if(S.ex)trail()}
+const trail=guard(async()=>{const x=S.ex;let rows='',act='';
+ if(x.t==='a'){const [h,as]=await Promise.all([api(`/assets/${x.id}/history`),api('/assets')]);const a=as.find(z=>z.id===x.id);
+  rows=h.map(r=>`<div class="border-l-2 border-acc pl-3 pb-3"><b>${e(r.event)}</b><div class="text-sm">${r.from_holder?e(r.from_holder)+' to ':''}${e(r.to_holder||'')} ${e(r.note)}</div><div class="text-xs text-mut">${e(r.actor)} - ${fmt(r.ts)}</div></div>`).join('');
+  if(can('asset:w')&&a.status!=='disposed')act=`<button class="btn" onclick="xfer('${x.id}')">${ic('transfer_within_a_station')}Transfer custody</button>
+   <select class="!w-auto" onchange="setSt('${x.id}',this.value)"><option value="">Change status...</option>${['in_custody','in_use','maintenance','seized_evidence','disposed'].map(s=>`<option value="${s}">${s.replace('_',' ')}</option>`).join('')}</select>`;
+  act+=` <span class="mono text-xs">QR: dms://asset/${x.id}</span>`}
+ else{act=`<button class="btn" onclick="S.R.sel='${x.id}';verifyDoc0('${x.id}')">${ic('verified')}Verify integrity</button><button class="btn" onclick="cert('${x.id}')">${ic('workspace_premium')}Court certificate</button>`;
+  if(can('audit:r')){const m=await api(`/audit/merkle?target=${x.id}`);
+   rows=m.entries.map(r=>`<div class="border-l-2 border-acc pl-3 pb-3"><b>${e(r.action)}</b><div class="text-xs text-mut">${e(r.actor)} - ${fmt(r.ts)}</div><div class="mono text-xs">${r.hash.slice(0,20)}...</div></div>`).join('');
+   act+=`<button class="btn" onclick='dlProof(${JSON.stringify(m)})'>${ic('account_tree')}Export Merkle proof</button>`}
+  else rows='<p class="text-sm text-mut">The event trail is visible to judges and auditors.</p>'}
+ $('trail').innerHTML=`<div class="card p-4"><h3 class="font-semibold mb-2">Custody trail for ${e(x.id)}</h3><div class="flex flex-wrap gap-2 mb-3 items-center">${act}</div><div id="res" class="text-sm mb-3"></div>${rows||'<p class="text-sm text-mut">No events recorded.</p>'}</div>`});
+const verifyDoc0=id=>verifyDoc(id);
+const dlProof=m=>save('merkle-proof.json',new Blob([JSON.stringify(m,null,2)],{type:'application/json'}));
+const verLedger=guard(async()=>{const v=await api('/audit/verify');toast(v.intact?'Audit ledger intact':'Ledger broken at entry '+v.broken_at,v.intact)});
+const newAsset=guard(async()=>{const cs=await api('/cases');modal('Register exhibit',fld('name','Exhibit name','text','required')+fld('category','Category','text','required placeholder="Weapon, vehicle, device"')+fld('serial','Serial or tag number','text','required')+fld('holder','Current holder','text','required')+sel('case_id','Linked case',[['','None'],...caseOpts(cs)]),
+ async f=>{const o=Object.fromEntries(f);o.case_id=o.case_id||null;const r=await post('/assets',o);toast('Registered '+r.id);render()})});
+const xfer=id=>modal('Transfer custody',fld('to','New holder','text','required')+fld('note','Reason for transfer'),async f=>{await post(`/assets/${id}/transfer`,{to:f.get('to'),note:f.get('note')});render()});
+const setSt=guard(async(id,s)=>{if(!s)return;if(s==='disposed'&&!confirm('Disposal is permanent. Continue?'))return;await post(`/assets/${id}/status`,{status:s});render()});
+
+/* ---------- handoffs ---------- */
+async function vHandoffs(){
+ const hs=await api('/handoffs');const now=Date.now()/1000;
+ const cols=['Police finalization','Prosecution review','Court docketing','Defense disclosure'];
+ $('view').innerHTML=`<div class="flex flex-wrap items-center gap-2 mb-4"><div class="mr-auto"><h1 class="text-2xl font-bold">Prosecution handoffs</h1><p class="text-sm text-mut">Time-limited packages signed in turn by police, prosecution and the court.</p></div></div>
+ <div class="grid md:grid-cols-4 gap-3 mb-4">${cols.map((c,i)=>`<div class="card p-3"><div class="font-semibold text-sm mb-2">${c}</div>
+  ${hs.filter(h=>h.stage_name===c).map(h=>`<button class="card p-2 w-full text-left mb-2 ${S.hs===h.id?'border-acc':''}" onclick="S.hs='${h.id}';render()"><div class="mono text-xs">${h.id}</div><div class="text-sm">${e(h.title)}</div><span class="tag ${h.status==='active'?'text-ok':'text-bad'}">${h.status}</span></button>`).join('')||'<p class="text-xs text-mut">Empty</p>'}</div>`).join('')}</div>
+ <div id="hd"></div>`;
+ const h=hs.find(x=>x.id===S.hs);if(!h){$('hd').innerHTML='<div class="card p-6 text-mut">Select a package to see its manifest and signatures. Start a handoff from the document repository.</div>';return}
+ const docs=await api('/documents');const left=Math.max(0,Math.round((h.expires-now)/3600));
+ const roles=[['officer','Police officer'],['prosecutor','Prosecutor'],['judge','Court clerk or judge']];
+ $('hd').innerHTML=`<div class="card p-4 space-y-3"><div class="flex flex-wrap items-center gap-2"><h3 class="font-semibold mr-auto">${h.id}: ${e(h.title)}</h3><span class="text-sm text-mut">To ${e(h.to_org)} - case ${e(h.case_id)}</span></div>
+ ${h.stage<3&&h.status==='active'?`<p class="text-sm">${ic('timer')} Expires in ${left}h if unsigned; expired packages cannot be signed.</p>`:''}
+ <div><div class="text-xs text-mut mb-1">Evidence manifest</div>${h.doc_ids.map(id=>{const d=docs.find(z=>z.id===id);return `<div class="text-sm">${ic('description')} ${e(d?d.title:id)} <span class="mono text-xs text-mut">${d?d.sha256.slice(0,14):''}...</span></div>`}).join('')}</div>
+ <div class="grid md:grid-cols-3 gap-2">${roles.map((r,i)=>{const s=h.sigs[i];return `<div class="card p-3 ${s?'border-ok':''}"><div class="text-xs text-mut">Party ${i+1}: ${r[1]}</div>${s?`<div class="text-sm text-ok">${ic('verified')} ${e(s.user)}</div><div class="text-xs text-mut">${fmt(s.ts)}</div><div class="mono text-xs break-all">${s.sig.slice(0,24)}...</div>`:'<div class="text-sm text-mut">Awaiting signature</div>'}</div>`}).join('')}</div>
+ <div class="flex flex-wrap gap-2">${h.status==='active'&&h.next_signer===S.role&&can('handoff:sign')?`<button class="btn btn-p" onclick="signH('${h.id}')">${ic('fingerprint')}Verify evidence and sign</button>`:''}
+ ${h.status==='active'&&can('handoff:w')?`<button class="btn btn-d" onclick="revokeH('${h.id}')">${ic('cancel')}Revoke package</button>`:''}</div>
+ <p class="text-xs text-mut">Signing re-checks every document hash first; a tampered file blocks the handoff and is logged.</p></div>`}
+const signH=guard(async id=>{if(!confirm('This signature is recorded permanently. Sign now?'))return;await post(`/handoffs/${id}/sign`);toast('Signed');render()});
+const revokeH=guard(async id=>{if(!confirm('Revoke this package for all parties?'))return;await post(`/handoffs/${id}/revoke`);render()});
+
+/* ---------- access control ---------- */
+async function vRbac(){const r=await api('/rbac');const roles=Object.keys(r.perms);
+ $('view').innerHTML=`<h1 class="text-2xl font-bold mb-4">Access control</h1><div class="card overflow-x-auto mb-4"><table class="w-full"><tr><th>User</th><th>Role</th></tr>
+ ${r.users.map(u=>`<tr><td>${e(u.username)}</td><td><select class="!w-auto" onchange="setRole('${u.username}',this.value)">${roles.map(x=>`<option ${x===u.role?'selected':''}>${x}</option>`).join('')}</select></td></tr>`).join('')}</table></div>
+ <div class="card overflow-x-auto"><h3 class="font-semibold p-4 pb-0">Role permissions</h3><table class="w-full"><tr><th>Role</th><th>Permissions</th></tr>${roles.map(x=>`<tr><td>${x}</td><td class="text-xs">${r.perms[x].map(p=>`<span class="tag mr-1">${p==='*'?'everything':p}</span>`).join('')}</td></tr>`).join('')}</table></div>`}
+const setRole=guard(async(u,r)=>{await post(`/users/${u}/role`,{role:r});toast(`${u} is now ${r}. The change applies at their next sign-in.`)});
+
+/* ---------- search ---------- */
+function openSearch(){const d=modal('Search cases and documents',`<input name="q" required autofocus placeholder="Keywords or a question about your cases"><label class="text-xs text-mut flex gap-2 items-center"><input type="checkbox" name="ask" class="!w-auto">Answer with AI from matching documents</label><div id="sr" class="text-sm space-y-2"></div>`,
+ async f=>{const r=await api(`/search?q=${encodeURIComponent(f.get('q'))}&ask=${f.get('ask')?'true':'false'}`);
+  $('sr').innerHTML=(r.answer?`<div class="card p-3 whitespace-pre-wrap">${e(r.answer)}</div>`:'')+r.results.map(x=>`<div>${ic('description')} <a class="underline" href="#" onclick="S.R.sel='${x.id}';S.R.case='';document.querySelectorAll('.fixed.inset-0').forEach(n=>n.remove());go('repo');return false">${e(x.title)}</a> <span class="text-xs text-mut">${e(x.case_id)}</span></div>`).join('')||'<p class="text-mut">No matching documents.</p>';throw Error('')},'Search');
+ d.querySelector('form').addEventListener('submit',()=>{},{once:false})}
+if(S.token)boot();
+</script></body></html>
