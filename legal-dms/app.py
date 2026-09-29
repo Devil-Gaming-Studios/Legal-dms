@@ -93,15 +93,21 @@ def groq(system, prompt):
     key = os.getenv("GROQ_API_KEY")
     if not key:
         raise HTTPException(503, "GROQ_API_KEY not set")
-    r = httpx.post("https://api.groq.com/openai/v1/chat/completions",
-                   headers={"Authorization": f"Bearer {key}"}, timeout=60,
-                   json={"model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-                         "temperature": 0.2,
-                         "messages": [{"role": "system", "content": system},
-                                      {"role": "user", "content": prompt}]})
-    if r.status_code != 200:
-        raise HTTPException(502, f"Groq error: {r.text[:200]}")
-    return r.json()["choices"][0]["message"]["content"]
+    models = [os.getenv("GROQ_MODEL")] if os.getenv("GROQ_MODEL") else \
+        ["llama-3.1-8b-instant", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+    err = ""
+    for m in models:
+        r = httpx.post("https://api.groq.com/openai/v1/chat/completions",
+                       headers={"Authorization": f"Bearer {key}"}, timeout=60,
+                       json={"model": m, "temperature": 0.2,
+                             "messages": [{"role": "system", "content": system},
+                                          {"role": "user", "content": prompt}]})
+        if r.status_code == 200:
+            return r.json()["choices"][0]["message"]["content"]
+        err = r.text[:200]
+        if "model" not in err.lower():
+            break
+    raise HTTPException(502, f"Groq error: {err}")
 
 
 def extract_text(name, data):
